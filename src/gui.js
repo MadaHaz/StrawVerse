@@ -223,13 +223,13 @@ try {
   logger.error(`Stack trace: ${err.stack}`);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await patchModulePaths();
   createWindow();
   createScrapperWindow();
   loadQueue();
   SettingsLoad();
-  patchModulePaths();
-  loadAllScrapers();
+  await loadAllScrapers();
   globalShortcut.register("CommandOrControl+Shift+I", () => {});
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

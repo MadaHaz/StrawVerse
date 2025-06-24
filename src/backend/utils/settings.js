@@ -28,8 +28,6 @@ let config = [],
 global.Anime_providers = {};
 global.Manga_providers = {};
 
-CheckScrapperFolderExists();
-
 // update the settings
 async function settingupdate({
   quality = null,
@@ -270,19 +268,28 @@ async function settingSave() {
 // Check Folder Exists
 async function CheckScrapperFolderExists() {
   const Scraper = path.join(userDataPath, "scrapers");
-  if (!fs.existsSync(Scraper)) fs.mkdirSync(Scraper, { recursive: true });
+  if (!fs.existsSync(Scraper)) {
+    fs.mkdirSync(Scraper, { recursive: true });
+    logger.info(`Created scraper folder: ${Scraper}`);
+  }
 
   ScraperAnime = path.join(Scraper, "Anime");
-  if (!fs.existsSync(ScraperAnime))
+  if (!fs.existsSync(ScraperAnime)) {
     fs.mkdirSync(ScraperAnime, { recursive: true });
+    logger.info(`Created Anime scraper folder: ${ScraperAnime}`);
+  }
 
   ScraperManga = path.join(Scraper, "Manga");
-  if (!fs.existsSync(ScraperManga))
+  if (!fs.existsSync(ScraperManga)) {
     fs.mkdirSync(ScraperManga, { recursive: true });
+    logger.info(`Created Manga scraper folder: ${ScraperManga}`);
+  }
 }
 
 // Patch Module Path
-function patchModulePaths() {
+async function patchModulePaths() {
+  await CheckScrapperFolderExists();
+
   const oldResolveLookupPaths = Module._resolveLookupPaths;
 
   Module._resolveLookupPaths = function (request, parent, newReturn) {
@@ -298,60 +305,67 @@ function patchModulePaths() {
 }
 
 // Load All downloaded Scrapers
-function loadAllScrapers() {
-  for (const key of Object.keys(global.Anime_providers)) {
-    delete global.Anime_providers[key];
-  }
+async function loadAllScrapers() {
+  try {
+    await CheckScrapperFolderExists();
+    logger.info("Loading all scrapers...");
 
-  for (const key of Object.keys(global.Manga_providers)) {
-    delete global.Manga_providers[key];
-  }
+    global.Anime_providers = {};
+    global.Manga_providers = {};
 
-  const files = [
-    ...fs
-      .readdirSync(ScraperAnime)
-      .filter((f) => f.endsWith(".js"))
-      .map((f) => ({ type: "anime", path: path.join(ScraperAnime, f) })),
-    ...fs
-      .readdirSync(ScraperManga)
-      .filter((f) => f.endsWith(".js"))
-      .map((f) => ({ type: "manga", path: path.join(ScraperManga, f) })),
-  ];
+    const files = [
+      ...fs
+        .readdirSync(ScraperAnime)
+        .filter((f) => f.toLowerCase().endsWith(".js"))
+        .map((f) => ({ type: "anime", path: path.join(ScraperAnime, f) })),
 
-  for (const { type, path: fullPath } of files) {
-    try {
-      delete require.cache[require.resolve(fullPath)];
-      const scraper = require(fullPath);
-      if (scraper?.name) {
-        if (type === "anime") {
-          global.Anime_providers[scraper.name] = scraper;
-        } else if (type === "manga") {
-          global.Manga_providers[scraper.name] = scraper;
+      ...fs
+        .readdirSync(ScraperManga)
+        .filter((f) => f.toLowerCase().endsWith(".js"))
+        .map((f) => ({ type: "manga", path: path.join(ScraperManga, f) })),
+    ];
+
+    logger.info(`Found ${files.length} scraper files.`);
+
+    for (const { type, path: fullPath } of files) {
+      try {
+        const resolvedPath = require.resolve(fullPath);
+        delete require.cache[resolvedPath];
+
+        const scraper = require(fullPath);
+        if (scraper?.name) {
+          if (type === "anime") global.Anime_providers[scraper.name] = scraper;
+          if (type === "manga") global.Manga_providers[scraper.name] = scraper;
+
+          logger.info(`Loaded ${type} scraper: ${scraper.name}`);
+        } else {
+          logger.warn(`Scraper missing 'name' export: ${fullPath}`);
         }
-      } else {
-        logger.warn(`Scraper ${fullPath} does not export a 'name' property`);
+      } catch (err) {
+        logger.error(`Failed to load scraper ${fullPath}: ${err.message}`);
       }
-    } catch (error) {
-      logger.error(`Failed to load scraper ${fullPath}: ${error.message}`);
     }
-  }
 
-  global.win.webContents.send("extention-updated", {
-    Anime: Object.entries(global.Anime_providers || {}).map(([key, val]) => ({
-      name: key,
-      version: val.version,
-    })),
-    Manga: Object.entries(global.Manga_providers || {}).map(([key, val]) => ({
-      name: key,
-      version: val.version,
-    })),
-  });
+    global.win.webContents.send("extention-updated", {
+      Anime: Object.entries(global.Anime_providers || {}).map(([key, val]) => ({
+        name: key,
+        version: val.version,
+      })),
+      Manga: Object.entries(global.Manga_providers || {}).map(([key, val]) => ({
+        name: key,
+        version: val.version,
+      })),
+    });
+  } catch (err) {
+    logger.error(`Error in loadAllScrapers: ${err.message}`);
+  }
 }
 
 // Download / Delete Scrapper
 async function HandleExtensions(TaskType, AnimeManga, ExtensionName) {
+  await CheckScrapperFolderExists();
   const extensionPath = path.join(
-    `${AnimeManga === "Anime" ? ScraperAnime : ScraperManga}`,
+    AnimeManga === "Anime" ? ScraperAnime : ScraperManga,
     `${ExtensionName}.js`
   );
   if (TaskType === "add") {
@@ -360,7 +374,7 @@ async function HandleExtensions(TaskType, AnimeManga, ExtensionName) {
         `https://raw.githubusercontent.com/TheYogMehta/extensions/refs/heads/main/extensions/${AnimeManga}/${ExtensionName}.js`
       );
       fs.writeFileSync(extensionPath, response.body, "utf-8");
-      loadAllScrapers();
+      await loadAllScrapers();
       return {
         type: "success",
         title: `${AnimeManga} Extention Installed!`,
@@ -376,7 +390,7 @@ async function HandleExtensions(TaskType, AnimeManga, ExtensionName) {
   } else if (TaskType === "remove") {
     if (fs.existsSync(extensionPath)) {
       fs.unlinkSync(extensionPath);
-      loadAllScrapers();
+      await loadAllScrapers();
       return {
         type: "success",
         title: `Removed ${AnimeManga} Extention!`,

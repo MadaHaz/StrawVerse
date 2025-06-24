@@ -27,7 +27,8 @@ function createScrapperWindow() {
       if (
         details.resourceType === "mainFrame" ||
         details.url.includes("ddos-guard") ||
-        details.url.includes("apdoesnthavelogotheysaidapistooplaintheysaid")
+        details.url.includes("apdoesnthavelogotheysaidapistooplaintheysaid") ||
+        details.url.includes("api/fsearch")
       ) {
         callback({ cancel: false });
       } else {
@@ -46,7 +47,7 @@ function createScrapperWindow() {
   );
 
   global.ScrapperWindow.on("closed", () => {
-    ScrapperWindow = null;
+    global.ScrapperWindow = null;
   });
 
   loadCookies();
@@ -96,19 +97,49 @@ global.scrapeURL = async (url, type = null) => {
 };
 
 async function processQueue() {
-  if (isBusy || queue.length === 0 || !ScrapperWindow) return;
+  if (isBusy || queue.length === 0 || !global.ScrapperWindow) return;
 
   const { url, resolve, reject } = queue.shift();
   isBusy = true;
 
   try {
-    await global.ScrapperWindow.loadURL(url);
+    if (typeof url === "object") {
+      await global.ScrapperWindow.loadURL(url.url);
 
-    await new Promise((resolve) => {
-      global.ScrapperWindow.webContents.once("did-stop-loading", resolve);
-    });
+      const result = await global.ScrapperWindow.webContents.executeJavaScript(`
+          (async () => {
+            try {
+              const res = await fetch("${url.url}${url.path}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(${JSON.stringify(url.body)})
+              });
+              return await res.text();
+            } catch (err) {
+              return "FETCH_ERROR: " + err.message;
+            }
+          })()
+        `);
 
-    await new Promise((r) => setTimeout(r, 1500));
+      if (result.startsWith("FETCH_ERROR:")) {
+        throw result;
+      } else {
+        try {
+          const json = JSON.parse(result);
+          resolve(json);
+        } catch {
+          throw result;
+        }
+      }
+    } else {
+      await global.ScrapperWindow.loadURL(url);
+
+      await new Promise((resolve) => {
+        global.ScrapperWindow.webContents.once("did-stop-loading", resolve);
+      });
+
+      await new Promise((r) => setTimeout(r, 1500));
+    }
 
     const bodyText = await global.ScrapperWindow.webContents.executeJavaScript(
       "document.body.innerText"
@@ -125,6 +156,7 @@ async function processQueue() {
     }
   } catch (err) {
     if (err.message.includes("ERR_ABORTED")) {
+      // INGORED
     } else {
       reject(err);
     }

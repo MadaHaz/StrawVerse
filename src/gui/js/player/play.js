@@ -110,6 +110,12 @@ function updateVideoSource() {
               type: "application/x-mpegURL",
               label: source?.quality,
             };
+          } else if (source?.url?.endsWith(".mpd")) {
+            return {
+              src: source?.url,
+              type: "application/dash+xml",
+              label: source?.quality,
+            };
           } else {
             return {
               src: source?.url,
