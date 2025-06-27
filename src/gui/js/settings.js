@@ -1,3 +1,5 @@
+let originalSettings = {};
+
 window.sharedStateAPI.on("mal", (data) => {
   let LoggedIn = data?.LoggedIn;
   document.getElementById("connectMal").hidden = LoggedIn;
@@ -7,22 +9,50 @@ window.sharedStateAPI.on("mal", (data) => {
 
 window.sharedStateAPI.on("extention-updated", (data) => {
   // Anime Provider
-  if (data?.Anime.length > 0) {
-    document.getElementById("anime-provider").innerHTML = data?.Anime.map(
+  const animeSelect = document.getElementById("anime-provider");
+  const currentAnimeProvider = animeSelect.value;
+
+  if (data?.Anime?.length > 0) {
+    animeSelect.innerHTML = data.Anime.map(
       (name) => `<option value="${name.name}">${name.name}</option>`
     ).join("");
   } else {
-    document.getElementById("anime-provider").innerHTML = ``;
+    animeSelect.innerHTML = "";
+  }
+
+  if (
+    Array.from(animeSelect.options).some(
+      (opt) => opt.value === currentAnimeProvider
+    )
+  ) {
+    animeSelect.value = currentAnimeProvider;
+  } else {
+    animeSelect.value = null;
   }
 
   // Manga Provider
-  if (data?.Manga.length > 0) {
-    document.getElementById("manga-provider").innerHTML = data?.Manga.map(
+  const mangaSelect = document.getElementById("manga-provider");
+  const currentMangaProvider = mangaSelect.value;
+
+  if (data?.Manga?.length > 0) {
+    mangaSelect.innerHTML = data.Manga.map(
       (name) => `<option value="${name.name}">${name.name}</option>`
     ).join("");
   } else {
-    document.getElementById("manga-provider").innerHTML = ``;
+    mangaSelect.innerHTML = "";
   }
+
+  if (
+    Array.from(mangaSelect.options).some(
+      (opt) => opt.value === currentMangaProvider
+    )
+  ) {
+    mangaSelect.value = currentMangaProvider;
+  } else {
+    mangaSelect.value = null;
+  }
+
+  checkForChanges();
 });
 
 function showSection(targetId) {
@@ -41,26 +71,23 @@ function hideLoadingAnimation() {
 
 function submitSettings(event) {
   event.preventDefault();
-  const statusElement = document.getElementById("malstatus");
-  const autotrackElement = document.getElementById("malautotrack");
 
   const data = {
     quality: document.getElementById("quality-select")?.value || null,
     Animeprovider: document.getElementById("anime-provider")?.value || null,
     Mangaprovider: document.getElementById("manga-provider")?.value || null,
     CustomDownloadLocation:
-      document.getElementById("download-location")?.value || null,
+      document.getElementById("download-location")?.value || "",
     Pagination: document.getElementById("pagination")?.value || null,
     autoLoadNextChapter:
       document.getElementById("auto-load-next-chapter-select")?.value || null,
-    autotrack: autotrackElement ? autotrackElement.value : null,
-    status: statusElement ? statusElement.value : null,
+    autotrack: document.getElementById("malautotrack")?.value || null,
+    status: document.getElementById("malstatus")?.value || null,
     enableDiscordRPC:
       document.getElementById("discord-rpc-status-select")?.value || null,
   };
 
   document.getElementById("save-settings").style.display = "none";
-
   showLoadingAnimation();
 
   fetch("/api/settings", {
@@ -77,10 +104,14 @@ function submitSettings(event) {
           title: "Updated Config",
           html: `<pre>${responseData.message}</pre>`,
         });
+
+        // Update originalSettings to new saved values
+        originalSettings = { ...data };
+        document.getElementById("save-settings").style.display = "none";
       } else {
         Swal.fire({
           icon: "error",
-          title: "Opps Error :P",
+          title: "Oops Error :P",
           text: `${responseData.error}`,
         });
       }
@@ -104,60 +135,85 @@ function MalLogout() {
   fetch("./mal/logout");
 }
 
+function checkForChanges() {
+  const currentSettings = {
+    quality: document.getElementById("quality-select")?.value || null,
+    Animeprovider: document.getElementById("anime-provider")?.value || null,
+    Mangaprovider: document.getElementById("manga-provider")?.value || null,
+    CustomDownloadLocation:
+      document.getElementById("download-location")?.value || "",
+    Pagination: document.getElementById("pagination")?.value || null,
+    autoLoadNextChapter:
+      document.getElementById("auto-load-next-chapter-select")?.value || null,
+    autotrack: document.getElementById("malautotrack")?.value || null,
+    status: document.getElementById("malstatus")?.value || null,
+    enableDiscordRPC:
+      document.getElementById("discord-rpc-status-select")?.value || null,
+  };
+
+  const changed = Object.keys(originalSettings).some(
+    (key) => originalSettings[key] !== currentSettings[key]
+  );
+
+  document.getElementById("save-settings").style.display = changed
+    ? "block"
+    : "none";
+}
+
 function init(url, settings) {
-  // Mal Connected Or Not
-  let UrlPresent = url && url?.length > 0 ? true : false;
+  originalSettings = {
+    quality: settings?.quality ?? "1080p",
+    Animeprovider: settings?.Animeprovider ?? null,
+    Mangaprovider: settings?.Mangaprovider ?? null,
+    CustomDownloadLocation: settings?.CustomDownloadLocation ?? "",
+    Pagination: settings?.pagination ?? "on",
+    autoLoadNextChapter: settings?.autoLoadNextChapter ?? "on",
+    autotrack: settings?.malautotrack ?? "off",
+    status: settings?.status ?? "plan_to_watch",
+    enableDiscordRPC: settings?.enableDiscordRPC ?? "off",
+  };
+
+  const UrlPresent = url && url?.length > 0;
   document.getElementById("connectMal").hidden = !UrlPresent;
   document.getElementById("myAnimeList-logout").hidden = UrlPresent;
   document.getElementById("myAnimeList-config").hidden = UrlPresent;
 
-  // Mal Status
-  document.getElementById("malstatus").value =
-    settings?.status ?? "plan_to_watch";
-
-  // Mal Autotracking On / Off
-  document.getElementById("malautotrack").value =
-    settings?.malautotrack ?? "off";
-
-  // Anime Provider
-  if (settings?.providers?.Anime.length > 0) {
-    document.getElementById("anime-provider").innerHTML =
-      settings?.providers?.Anime.map(
-        (name) => `<option value="${name}">${name}</option>`
-      ).join("");
+  const animeSelect = document.getElementById("anime-provider");
+  if (settings?.providers?.Anime?.length > 0) {
+    animeSelect.innerHTML = settings.providers.Anime.map(
+      (name) =>
+        `<option value="${name}" ${
+          name === originalSettings.Animeprovider ? "selected" : ""
+        }>${name}</option>`
+    ).join("");
   }
 
-  document.getElementById("anime-provider").value =
-    settings?.Animeprovider ?? null;
-
-  // Anime Quality
-  document.getElementById("quality-select").value =
-    settings?.quality ?? "1080p";
-
-  // Manga Provider
-  if (settings?.providers?.Manga.length > 0) {
-    document.getElementById("manga-provider").innerHTML =
-      settings?.providers?.Manga.map(
-        (name) => `<option value="${name}">${name}</option>`
-      ).join("");
+  const mangaSelect = document.getElementById("manga-provider");
+  if (settings?.providers?.Manga?.length > 0) {
+    mangaSelect.innerHTML = settings.providers.Manga.map(
+      (name) =>
+        `<option value="${name}" ${
+          name === originalSettings.Mangaprovider ? "selected" : ""
+        }>${name}</option>`
+    ).join("");
   }
 
-  document.getElementById("manga-provider").value =
-    settings?.Mangaprovider ?? null;
-
-  // Manga AutoLoad Next Chapter
+  document.getElementById("malstatus").value = originalSettings.status;
+  document.getElementById("malautotrack").value = originalSettings.autotrack;
+  document.getElementById("quality-select").value = originalSettings.quality;
   document.getElementById("auto-load-next-chapter-select").value =
-    settings?.autoLoadNextChapter ?? "on";
-
-  // pagination
-  document.getElementById("pagination").value = settings?.pagination ?? "on";
+    originalSettings.autoLoadNextChapter;
+  document.getElementById("pagination").value = originalSettings.Pagination;
+  document.getElementById("discord-rpc-status-select").value =
+    originalSettings.enableDiscordRPC;
+  document.getElementById("download-location").value =
+    originalSettings.CustomDownloadLocation;
 
   document.querySelectorAll("input, select").forEach((input) => {
-    input.addEventListener(
-      "input",
-      () => (document.getElementById("save-settings").style.display = "block")
-    );
+    input.addEventListener("input", checkForChanges);
+    input.addEventListener("change", checkForChanges);
   });
 
+  document.getElementById("save-settings").style.display = "none";
   showSection("utils");
 }
