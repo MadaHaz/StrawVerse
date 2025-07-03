@@ -3,6 +3,19 @@
   <img src="https://capsule-render.vercel.app/api?type=soft&fontColor=703ee5&text=Anime-Manga-batch-downloader-gui&height=150&fontSize=40&desc=Ridiculously%20efficient,%20fast%20and%20light-weight.&descAlignY=75&descAlign=50&color=00000000&animation=twinkling">
 </h1>
 
+## 💖 First Supporter
+
+Special thanks to the first person who supported the development of this project:
+
+| Name/Handle | Contribution | Link |
+|-------------|--------------|------|
+| maighe | $5 | [YouTube](https://www.youtube.com/@maighe_tv2848) |
+
+Your contribution helps me improve, maintain, and update this project. Thank you!
+
+Want to support? [Buy me a coffee](https://buymeacoffee.com/kowareta).
+
+
 ## Table of Contents 📖
 
 - [Overview](#overview)
