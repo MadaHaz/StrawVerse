@@ -1,6 +1,6 @@
 // libs
 const path = require("path");
-const { download } = require("./utils/downloader");
+const { download, downloader } = require("./utils/downloader");
 const { logger } = require("./utils/AppLogger");
 
 // imports
@@ -18,15 +18,20 @@ const {
 } = require("./utils/queue");
 const { providerFetch } = require("./utils/settings");
 
+// Global state for download control
+global.isPaused = false;
+global.activeDownloads = global.activeDownloads || new Map();
+
 // queue start
 async function continuousExecution() {
   try {
     let AnimeQueue = await getQueue();
 
     while (true) {
-      if (AnimeQueue?.length === 0) {
+      if (AnimeQueue?.length === 0 || global.isPaused) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         AnimeQueue = await getQueue();
+        continue;
       }
 
       for (let i = 0; i < AnimeQueue.length; i++) {
@@ -161,7 +166,7 @@ async function downloadEpisodeByQuality(
         sourcesArray?.subtitles ?? [],
         config?.mergeSubtitles === "on" ? true : false,
         (config?.subtitleFormat ?? "ttv") === "srt",
-        provider.provider_name
+        config?.threads || 4
       );
     } else {
       throw new Error("No source link found.");
@@ -181,7 +186,8 @@ async function downloadVideo(
   epid,
   subtitles = [],
   MergeSubtitles,
-  subtitleFormat = false
+  subtitleFormat = false,
+  threads = 4
 ) {
   try {
     await download({
@@ -193,6 +199,7 @@ async function downloadVideo(
       subtitles: subtitles,
       MergeSubtitles: MergeSubtitles,
       ChangeTosrt: subtitleFormat,
+      threads: threads,
     });
   } catch (err) {
     throw new Error(`Failed To Download \n${err}`);
@@ -233,4 +240,28 @@ async function downloadMangaChapters(
 
 module.exports = {
   continuousExecution,
+  pauseDownloads: () => { 
+    global.isPaused = true; 
+    logger.info("All downloads paused");
+  },
+  resumeDownloads: () => { 
+    global.isPaused = false; 
+    logger.info("All downloads resumed");
+  },
+  pauseCurrentDownload: (epid) => {
+    const downloadInstance = global.activeDownloads.get(epid);
+    if (downloadInstance && downloadInstance.pauseDownload) {
+      downloadInstance.pauseDownload();
+      return true;
+    }
+    return false;
+  },
+  resumeCurrentDownload: (epid) => {
+    const downloadInstance = global.activeDownloads.get(epid);
+    if (downloadInstance && downloadInstance.resumeDownload) {
+      downloadInstance.resumeDownload();
+      return true;
+    }
+    return false;
+  }
 };

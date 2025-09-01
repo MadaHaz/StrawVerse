@@ -22,12 +22,50 @@
         <div class="myBar" id="myBar" style="width: 80%; height: 50px"></div>
       </div>
 
+      <!-- Download stats and controls -->
+      <div class="download-stats" id="downloadStats" style="display: none;">
+        <div class="stats-row">
+          <div class="stat-item">
+            <span class="stat-label">Speed:</span>
+            <span class="stat-value" id="downloadSpeed">0 B/s</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Threads:</span>
+            <span class="stat-value" id="threadCount">4</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Progress:</span>
+            <span class="stat-value" id="downloadProgress">0%</span>
+          </div>
+        </div>
+        <div class="controls-row">
+          <button id="pauseBtn" class="btn btn-warning" onclick="pauseDownload()">Pause</button>
+          <button id="resumeBtn" class="btn btn-success" onclick="resumeDownload()" style="display: none;">Resume</button>
+          <div class="thread-selector">
+            <label for="threadSelect">Threads:</label>
+            <select id="threadSelect" class="form-select" onchange="updateThreadCount()">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4" selected>4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       <!-- Queue below progress bar -->
       <div id="queue" class="container mt-4">
         <!-- Queue items will be injected here -->
       </div>
     </div>
     <script src="/js/libs/loading-bar.js"></script>
+    <script src="/js/libs/sweetalert.js"></script>
     <script src="/js/downloads.js"></script>
   </body>
 </html>

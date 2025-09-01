@@ -16,6 +16,12 @@ const {
   downloadMangaMulti,
 } = require("./download");
 const {
+  pauseDownloads,
+  resumeDownloads,
+  pauseCurrentDownload,
+  resumeCurrentDownload,
+} = require("./database");
+const {
   latestMangas,
   MangaSearch,
   MangaInfo,
@@ -81,6 +87,7 @@ router.post("/api/settings", async (req, res) => {
     Pagination,
     autoLoadNextChapter,
     enableDiscordRPC,
+    threads,
   } = req.body;
   try {
     if (
@@ -104,6 +111,9 @@ router.post("/api/settings", async (req, res) => {
     if (autotrack && autotrack !== "on" && autotrack !== "off")
       return res.status(400).json({ error: "Enter on / off in autotracking." });
 
+    if (threads && (parseInt(threads) < 1 || parseInt(threads) > 10))
+      return res.status(400).json({ error: "Enter threads between 1 and 10." });
+
     if (CustomDownloadLocation && CustomDownloadLocation !== null)
       await ensureDirectoryExists(CustomDownloadLocation);
 
@@ -115,6 +125,7 @@ router.post("/api/settings", async (req, res) => {
       Pagination: Pagination,
       autoLoadNextChapter: autoLoadNextChapter,
       enableDiscordRPC: enableDiscordRPC,
+      threads: threads,
     });
 
     const data = await settingfetch();
@@ -129,6 +140,7 @@ router.post("/api/settings", async (req, res) => {
       `Autoload Next Chapter : ${data?.autoLoadNextChapter}`,
       `Pagination : ${data?.Pagination}`,
       `Discord RPC Enabled: ${data?.enableDiscordRPC}`,
+      `Download Threads: ${data?.threads}`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -143,7 +155,7 @@ router.post("/api/settings", async (req, res) => {
 
 // Handles Download Progress & Sends To FrontEnd
 router.post("/api/logger", async (req, res) => {
-  const { caption, totalSegments, currentSegments, epid } = req.body;
+  const { caption, totalSegments, currentSegments, epid, speed, threads, isPaused } = req.body;
   try {
     let queue = (await updateQueue(epid, totalSegments, currentSegments)) ?? [];
 
@@ -153,11 +165,17 @@ router.post("/api/logger", async (req, res) => {
         totalSegments,
         currentSegments,
         epid,
+        speed,
+        threads,
+        isPaused,
         queue: queue.filter((item) => item?.currentSegments === 0),
       });
     } else {
       global.win.webContents.send("download-logger", {
         caption: "Nothing in progress",
+        speed,
+        threads,
+        isPaused,
         queue,
       });
     }
@@ -437,6 +455,9 @@ router.post("/downloads", async (req, res) => {
   let Response = {
     caption: "Nothing in progress",
     queue,
+    speed: "0 B/s",
+    threads: 4,
+    isPaused: false,
   };
 
   let itemWithSegments = queue.find((item) => item.currentSegments > 0);
@@ -445,6 +466,18 @@ router.post("/downloads", async (req, res) => {
     Response.caption = itemWithSegments.caption;
     Response.totalSegments = itemWithSegments.totalSegments;
     Response.currentSegments = itemWithSegments.currentSegments;
+    Response.epid = itemWithSegments.epid;
+    
+    // Get current download instance for speed and thread info
+    const activeDownload = global.activeDownloads?.get(itemWithSegments.epid);
+    if (activeDownload) {
+      Response.speed = activeDownload.formatSpeed(activeDownload.speed);
+      Response.threads = activeDownload.threads;
+      Response.isPaused = activeDownload.isPaused;
+    } else if (itemWithSegments.config?.threads) {
+      Response.threads = itemWithSegments.config.threads;
+    }
+    
     Response.queue = queue.filter(
       (item) => item?.epid !== itemWithSegments?.epid
     );
@@ -507,6 +540,39 @@ router.get("/api/download/remove", async (req, res) => {
       message: `Error Removing ${req?.query?.AnimeEpId ? "Ep" : "Ep(s)"}`,
       err,
     });
+  }
+});
+
+// Pause/Resume download endpoints
+router.post("/api/download/pause", async (req, res) => {
+  try {
+    const { epid } = req.body;
+    if (epid) {
+      pauseCurrentDownload(epid);
+      res.json({ message: "Download paused", epid });
+    } else {
+      pauseDownloads();
+      res.json({ message: "All downloads paused" });
+    }
+  } catch (err) {
+    logger.error(`Error pausing download: ${err.message}`);
+    res.status(500).json({ error: "Failed to pause download" });
+  }
+});
+
+router.post("/api/download/resume", async (req, res) => {
+  try {
+    const { epid } = req.body;
+    if (epid) {
+      resumeCurrentDownload(epid);
+      res.json({ message: "Download resumed", epid });
+    } else {
+      resumeDownloads();
+      res.json({ message: "All downloads resumed" });
+    }
+  } catch (err) {
+    logger.error(`Error resuming download: ${err.message}`);
+    res.status(500).json({ error: "Failed to resume download" });
   }
 });
 

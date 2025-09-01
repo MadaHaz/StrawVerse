@@ -109,6 +109,7 @@ async function downloadAnimeSingle(
           mergeSubtitles: config?.mergeSubtitles,
           subtitleFormat: config?.subtitleFormat,
           CustomDownloadLocation: config?.CustomDownloadLocation,
+          threads: config?.threads || 4,
         },
         epid: episodeid,
         totalSegments: 0,
@@ -214,6 +215,7 @@ async function downloadMangaSingle(
         config: {
           Mangaprovider: Mangaprovider.provider_name,
           CustomDownloadLocation: config?.CustomDownloadLocation,
+          threads: config?.threads || 4,
         },
         ChapterTitle: `Chapter ${number}`,
         epid: chapterid,

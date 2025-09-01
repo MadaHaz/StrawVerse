@@ -5,6 +5,7 @@ const iso6391 = require("iso-639-1");
 const path = require("path");
 const got = require("got");
 const fs = require("fs");
+const MTDownloader = require("mt-downloader");
 
 const ffmpegPath = ffmpeg.replace("app.asar", "app.asar.unpacked");
 
@@ -18,6 +19,7 @@ class downloader {
     subtitles = [],
     MergeSubtitles = false,
     ChangeTosrt = false,
+    threads = 4,
   }) {
     this.directory = directory;
     if (streamUrl?.url) {
@@ -29,6 +31,7 @@ class downloader {
     this.Epnum = parseInt(Epnum);
     this.caption = caption;
     this.EpID = EpID;
+    this.threads = Math.max(1, Math.min(10, parseInt(threads) || 4));
     this.subtitles =
       subtitles?.length > 0
         ? subtitles?.filter(({ lang }) => lang !== "Thumbnails") ?? []
@@ -36,6 +39,12 @@ class downloader {
     this.MergeSubtitles = MergeSubtitles ?? false;
     this.ChangeTosrt = ChangeTosrt ?? false;
     this.downloadedPaths = [];
+    this.isPaused = false;
+    this.speed = 0;
+    this.startTime = Date.now();
+    this.downloadedBytes = 0;
+    this.lastSpeedUpdate = Date.now();
+    this.lastDownloadedBytes = 0;
   }
 
   // Additional Checks
@@ -96,58 +105,191 @@ class downloader {
 
   async DownloadStart() {
     try {
-      let FailedSegments = 0;
+      this.SegmentsFile = path.join(this.directory, `${this.Epnum}Ep.ts`);
+      this.metadataFile = path.join(this.directory, `${this.Epnum}Ep.mtd`);
+      
+      // Check if resumable download exists
+      let resumable = false;
+      if (fs.existsSync(this.metadataFile)) {
+        try {
+          const metadata = JSON.parse(fs.readFileSync(this.metadataFile, 'utf8'));
+          if (metadata.url === this.streamUrl && metadata.segmentsCount === this.Segments.length) {
+            resumable = true;
+            this.currentSegments = metadata.downloadedSegments || 0;
+            logger.info(`Resuming download from segment ${this.currentSegments}`);
+          }
+        } catch (err) {
+          logger.error('Failed to read resume metadata:', err.message);
+        }
+      }
+
+      // Save metadata for resume capability
+      const metadata = {
+        url: this.streamUrl,
+        segmentsCount: this.Segments.length,
+        downloadedSegments: this.currentSegments,
+        epid: this.EpID,
+        title: this.caption
+      };
+      fs.writeFileSync(this.metadataFile, JSON.stringify(metadata, null, 2));
+
       this.writer = fs.createWriteStream(this.SegmentsFile, {
-        flags: "a",
+        flags: resumable ? "a" : "w",
         encoding: null,
       });
+      
       this.writer.on("error", (err) => {
         throw err;
       });
 
-      while (this.Segments.length > 0) {
-        try {
-          let Segment = this.Segments[0];
-          if (!Segment) throw new Error("[ STOPPING ] Segment Missing!");
-          await this.appendSegment(Segment);
-          this.Segments.shift();
-          this.currentSegments++;
-          await this.logProgress();
-        } catch (err) {
-          if (FailedSegments > 3)
-            throw new Error(
-              "[ STOPPING ] '3' Times Segment Failed To Download!"
-            );
-          FailedSegments++;
-          this.logProgress(`Failed To Download Segment! ( Continuing in 5s )`);
-          console.log(err);
-          await new Promise((res) => setTimeout(res, 5000)); // 5s delay
-        }
-      }
+      // Download segments with multi-threading
+      await this.downloadSegmentsConcurrently();
 
       await new Promise((resolve) => {
         this.writer.end(resolve);
       });
+
+      // Clean up metadata file on successful completion
+      if (fs.existsSync(this.metadataFile)) {
+        fs.unlinkSync(this.metadataFile);
+      }
     } catch (err) {
       throw new Error(err);
     }
   }
 
-  async appendSegment(segmentUrl) {
-    try {
-      const response = await got(segmentUrl, {
-        headers: this.headers ?? {},
-        responseType: "buffer",
-      });
-
-      await new Promise((resolve, reject) => {
-        this.writer.write(response.body, (err) => {
-          if (err) return reject(err);
+  async downloadSegmentsConcurrently() {
+    const segmentsToDownload = this.Segments.slice(this.currentSegments);
+    const maxConcurrent = Math.min(this.threads, segmentsToDownload.length);
+    
+    // Use a semaphore approach for concurrent downloads while maintaining order
+    let totalDownloadedBytes = 0;
+    const startTime = Date.now();
+    let downloadedSegments = new Array(segmentsToDownload.length);
+    let activeTasks = 0;
+    let currentWriteIndex = 0;
+    
+    // Initialize speed tracking
+    this.speed = 0;
+    
+    return new Promise((resolve, reject) => {
+      const processSegment = async (index) => {
+        if (index >= segmentsToDownload.length) {
+          return;
+        }
+        
+        activeTasks++;
+        const segment = segmentsToDownload[index];
+        
+        try {
+          // Check for pause
+          while (this.isPaused) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+          const segmentStartTime = Date.now();
+          const segmentData = await this.downloadSegment(segment);
+          const segmentEndTime = Date.now();
+          
+          // Calculate speed
+          const segmentSize = segmentData.length;
+          totalDownloadedBytes += segmentSize;
+          
+          // Update speed using the new method
+          this.updateSpeed(totalDownloadedBytes);
+          
+          downloadedSegments[index] = segmentData;
+          
+          // Write segments in order
+          while (currentWriteIndex < downloadedSegments.length && downloadedSegments[currentWriteIndex]) {
+            const dataToWrite = downloadedSegments[currentWriteIndex];
+            await new Promise((resolveWrite, rejectWrite) => {
+              this.writer.write(dataToWrite, (err) => {
+                if (err) return rejectWrite(err);
+                resolveWrite();
+              });
+            });
+            
+            this.currentSegments++;
+            this.downloadedBytes += dataToWrite.length;
+            currentWriteIndex++;
+            
+            // Update metadata for resume capability
+            const metadata = {
+              url: this.streamUrl,
+              segmentsCount: this.Segments.length,
+              downloadedSegments: this.currentSegments,
+              epid: this.EpID,
+              title: this.caption
+            };
+            fs.writeFileSync(this.metadataFile, JSON.stringify(metadata, null, 2));
+            
+            await this.logProgress();
+          }
+          
+        } catch (err) {
+          logger.error(`Failed to download segment ${index}:`, err.message);
+          reject(err);
+          return;
+        }
+        
+        activeTasks--;
+        
+        // Start next segment if we have capacity
+        const nextIndex = index + maxConcurrent;
+        if (nextIndex < segmentsToDownload.length) {
+          processSegment(nextIndex);
+        }
+        
+        // Check if we're done
+        if (activeTasks === 0 && currentWriteIndex >= segmentsToDownload.length) {
           resolve();
-        });
-      });
-    } catch (err) {
-      throw err;
+        }
+      };
+      
+      // Start initial batch
+      for (let i = 0; i < Math.min(maxConcurrent, segmentsToDownload.length); i++) {
+        processSegment(i);
+      }
+    });
+  }
+
+  async downloadSegment(segmentUrl) {
+    const response = await got(segmentUrl, {
+      headers: this.headers ?? {},
+      responseType: "buffer",
+    });
+    return response.body;
+  }
+
+  pauseDownload() {
+    this.isPaused = true;
+    logger.info(`Download paused for ${this.caption}`);
+  }
+
+  resumeDownload() {
+    this.isPaused = false;
+    logger.info(`Download resumed for ${this.caption}`);
+  }
+
+  updateSpeed(newBytes) {
+    const now = Date.now();
+    const timeDiff = (now - this.lastSpeedUpdate) / 1000; // seconds
+    const bytesDiff = newBytes - this.lastDownloadedBytes;
+    
+    if (timeDiff > 0.5) { // Update speed every 500ms
+      this.speed = bytesDiff / timeDiff;
+      this.lastSpeedUpdate = now;
+      this.lastDownloadedBytes = newBytes;
+      
+      // Also calculate average speed as fallback
+      const totalTime = (now - this.startTime) / 1000;
+      const avgSpeed = totalTime > 0 ? newBytes / totalTime : 0;
+      
+      // Use the higher of recent speed or average speed for better UX
+      if (avgSpeed > this.speed * 1.5 || this.speed === 0) {
+        this.speed = avgSpeed;
+      }
     }
   }
 
@@ -334,6 +476,9 @@ class downloader {
 
     if (ExtraMessage) caption += ExtraMessage;
 
+    // Calculate speed in human readable format
+    const speedFormatted = this.formatSpeed(this.speed);
+    
     await fetch(`http://localhost:${global.PORT}/api/logger`, {
       method: "POST",
       headers: {
@@ -344,6 +489,9 @@ class downloader {
         totalSegments: this.totalSegments + 1,
         currentSegments: this.currentSegments,
         epid: this.EpID,
+        speed: speedFormatted,
+        threads: this.threads,
+        isPaused: this.isPaused,
       }),
     }).catch((err) => {
       logger.error("Error updating download progress");
@@ -352,9 +500,29 @@ class downloader {
     });
   }
 
+  formatSpeed(bytesPerSecond) {
+    if (!bytesPerSecond || bytesPerSecond === 0 || isNaN(bytesPerSecond)) return "0 B/s";
+    
+    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    let unitIndex = 0;
+    let speed = bytesPerSecond;
+    
+    while (speed >= 1024 && unitIndex < units.length - 1) {
+      speed /= 1024;
+      unitIndex++;
+    }
+    
+    return `${speed.toFixed(1)} ${units[unitIndex]}`;
+  }
+
   async CleanEverything(everything = false) {
     // remove ts file
     await fs.promises.unlink(this.SegmentsFile).catch(() => {});
+
+    // remove metadata file
+    if (this.metadataFile) {
+      await fs.promises.unlink(this.metadataFile).catch(() => {});
+    }
 
     // remove mp4 ( only on error )
     if (everything) {
@@ -366,16 +534,26 @@ class downloader {
 async function download(args) {
   let obj = new downloader(args);
   try {
+    // Store the instance for pause/resume control
+    global.activeDownloads.set(args.EpID, obj);
+    
     await obj.DownloadsChecking();
     await obj.DownloadStart();
     await obj.CheckSubtitles();
     await obj.MergeSegments();
+    
+    // Remove from active downloads on completion
+    global.activeDownloads.delete(args.EpID);
   } catch (err) {
     await obj.CleanEverything();
+    global.activeDownloads.delete(args.EpID);
     console.log(err);
     logger.error(err);
     throw new Error(err);
   }
 }
 
-module.exports = { download };
+// Global download instances for pause/resume functionality
+global.activeDownloads = new Map();
+
+module.exports = { download, downloader };

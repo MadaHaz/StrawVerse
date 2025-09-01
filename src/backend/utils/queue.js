@@ -13,6 +13,10 @@ let AnimeQueue = [];
 
 // Add to Queue
 async function addToQueue(item) {
+  // Ensure threads setting is included with default value
+  if (!item.config) item.config = {};
+  if (!item.config.threads) item.config.threads = 4;
+  
   AnimeQueue.push(item);
   await saveQueue();
 }
@@ -97,6 +101,25 @@ async function checkEpisodeDownload(epid) {
   return found;
 }
 
+// Update thread count for all queued items
+async function updateQueueThreadCount(newThreadCount) {
+  let updated = 0;
+  AnimeQueue.forEach((item) => {
+    // Only update items that haven't started downloading (currentSegments === 0)
+    if (item.currentSegments === 0 && item.config) {
+      item.config.threads = newThreadCount;
+      updated++;
+    }
+  });
+  
+  if (updated > 0) {
+    await saveQueue();
+    logger.info(`Updated thread count to ${newThreadCount} for ${updated} queued items`);
+  }
+  
+  return updated;
+}
+
 global.getQueueNumber = () => {
   return AnimeQueue?.length ?? 0;
 };
@@ -109,5 +132,6 @@ module.exports = {
   updateQueue,
   getQueue,
   checkEpisodeDownload,
+  updateQueueThreadCount,
   SaveQueueData,
 };

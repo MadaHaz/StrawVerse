@@ -14,6 +14,7 @@ const {
 const { MalRefreshTokenGen } = require("./mal.js");
 const { StartDiscordRPC, StopDiscordRPC } = require("./discord");
 const { logger } = require("./AppLogger.js");
+const { updateQueueThreadCount } = require("./queue.js");
 
 // database create [ gets created in /user/your_name/AppData/Roaming ]
 const userDataPath = app.getPath("userData");
@@ -41,6 +42,7 @@ async function settingupdate({
   Pagination = null,
   autoLoadNextChapter = null,
   enableDiscordRPC = null,
+  threads = null,
 }) {
   const currentSettings = settings.get("config");
 
@@ -83,6 +85,14 @@ async function settingupdate({
     enableDiscordRPC = currentSettings?.enableDiscordRPC || "off";
   }
 
+  if (threads === null) {
+    threads = currentSettings?.threads || 4;
+  }
+
+  if (threads === null) {
+    threads = currentSettings?.threads || 4;
+  }
+
   if (CustomDownloadLocation === null) {
     CustomDownloadLocation =
       currentSettings?.CustomDownloadLocation || getDownloadsFolder();
@@ -99,6 +109,19 @@ async function settingupdate({
   config.Pagination = Pagination;
   config.autoLoadNextChapter = autoLoadNextChapter;
   config.enableDiscordRPC = enableDiscordRPC;
+  config.threads = parseInt(threads) || 4;
+
+  // Update thread count for all queued items when thread setting changes
+  if (threads !== null && currentSettings?.threads !== parseInt(threads)) {
+    try {
+      const updatedCount = await updateQueueThreadCount(parseInt(threads));
+      if (updatedCount > 0) {
+        logger.info(`Updated thread count for ${updatedCount} queued downloads`);
+      }
+    } catch (err) {
+      logger.error(`Failed to update queue thread count: ${err.message}`);
+    }
+  }
 
   if (config.enableDiscordRPC === "on") {
     try {
